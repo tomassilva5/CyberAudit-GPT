@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
@@ -10,6 +11,33 @@ WORKSPACE_SLUG = "cyberaudit"
 API_KEY = os.getenv("API_KEY")
 
 st.set_page_config(page_title="CyberAudit GPT", page_icon=None, layout="centered")
+
+if "query_history" not in st.session_state:
+    st.session_state.query_history = []
+
+if "query" not in st.session_state:
+    st.session_state.query = ""
+
+if "output_text" not in st.session_state:
+    st.session_state.output_text = ""
+
+if "output_sources" not in st.session_state:
+    st.session_state.output_sources = []
+
+if "last_error" not in st.session_state:
+    st.session_state.last_error = ""
+
+
+def check_server_status():
+    try:
+        response = requests.get("http://localhost:3001/api/ping", timeout=2)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+server_online = check_server_status()
+server_indicator = "🟢 Engine: Online" if server_online else "🔴 Engine: Offline"
+server_color = "#3fb950" if server_online else "#ff5f5f"
 
 st.markdown("""
 <style>
@@ -25,7 +53,6 @@ st.markdown("""
         background-color: #0d0f12;
     }
 
-    /* ── Header ── */
     .header-block {
         text-align: center;
         padding: 0;
@@ -70,7 +97,7 @@ st.markdown("""
         font-size: 1rem;
         letter-spacing: 0.15em;
         text-transform: uppercase;
-        color: #c9d1d9; /* Mais claro */
+        color: #c9d1d9;
         margin-bottom: 1rem;
         text-align: center;
         display: block;
@@ -167,6 +194,15 @@ st.markdown("""
         text-align: left;
     }
 
+    .result-header + .stMarkdown > div {
+        border: 1px solid #3fb950;
+        background-color: #0f161f;
+        border-radius: 16px;
+        padding: 1.5rem;
+        box-shadow: 0 0 0 1px rgba(63, 185, 80, 0.12);
+        margin-top: 0.5rem;
+    }
+
     .stAlert {
         background-color: #161b22 !important;
         border: 1px solid #30363d !important;
@@ -186,7 +222,7 @@ st.markdown("""
         font-family: 'IBM Plex Mono', monospace;
         font-size: 0.85rem;
         letter-spacing: 0.1em;
-        color: #8b949e; /* Mais claro também */
+        color: #8b949e;
     }
 
     #MainMenu, footer, header { visibility: hidden; }
@@ -206,12 +242,47 @@ st.markdown("""
 <hr class="section-divider">
 """, unsafe_allow_html=True)
 
+st.markdown(
+    f'<div style="display:flex; justify-content:flex-end; margin-bottom:1rem; color:{server_color}; font-family: IBM Plex Mono, monospace; letter-spacing: 0.08em;">{server_indicator}</div>',
+    unsafe_allow_html=True,
+)
+
+with st.expander("VIEW SYSTEM ARCHITECTURE"):
+    st.markdown("""
+    ### System Architecture: Local RAG Pipeline
+
+    ```text
+    [ Auditor Query ] 
+            │
+            ▼
+    [ Streamlit Frontend ] ──(REST API)──► [ AnythingLLM Local Server ]
+                                                    │
+                                ┌───────────────────┴───────────────────┐
+                                ▼                                       ▼
+                      [ Vector Database ]                       [ Local LLM ]
+                     (Indexed PDFs & CSVs)                  (Inference Engine)
+                                │                                       │
+                                └───────────► Context Retrieval ────────┘
+                                                    │
+                                                    ▼
+                                            [ Audit Analysis ]
+    ```
+
+    ### Component Breakdown:
+    *   **Frontend (Streamlit):** Provides a secure, local web interface for the auditor to submit queries without relying on external cloud platforms.
+    *   **API Layer:** Connects the frontend to the local AnythingLLM instance securely via environment variables (Secrets Management).
+    *   **Orchestration (AnythingLLM):** Manages the Retrieval-Augmented Generation (RAG) pipeline, ensuring the LLM only accesses authorized local data.
+    *   **Vector Database:** Stores mathematically embedded representations of the structured data (Network Inventory CSV) and unstructured theoretical data (Cybersecurity PDFs).
+    *   **Local LLM Engine:** Processes the auditor's query alongside the retrieved context to generate fact-based, private cybersecurity insights, entirely on-premises.
+    """, unsafe_allow_html=True)
+
 st.markdown('<div class="input-label">System Query</div>', unsafe_allow_html=True)
 
 query = st.text_input(
     label="query",
     label_visibility="collapsed",
-    placeholder="e.g. Identify open ports and cross-reference with CVEs..."
+    placeholder="e.g. Identify open ports and cross-reference with CVEs...",
+    key="query"
 )
 
 run = st.button("Run Audit", use_container_width=True)
@@ -229,21 +300,48 @@ if run:
             url = f"{ANYTHING_LLM_URL}/workspace/{WORKSPACE_SLUG}/chat"
 
             try:
-                response = requests.post(url, json=payload, headers=headers)
+                response = requests.post(url, json=payload, headers=headers, timeout=500)
 
                 if response.status_code == 200:
                     text_response = response.json().get("textResponse", "No response returned.")
-
-                    st.markdown('<div class="result-header">Analysis complete</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="result-box">{text_response}</div>', unsafe_allow_html=True)
-
+                    sources = response.json().get("sources", [])
+                    st.session_state.output_text = text_response
+                    st.session_state.output_sources = sources
+                    st.session_state.last_error = ""
+                elif response.status_code in [401, 403]:
+                    st.error("Authentication Error: Check if your API_KEY in the .env file is correct.")
+                    st.session_state.last_error = "Authentication Error"
                 else:
-                    st.error(f"Request failed — HTTP {response.status_code}")
+                    st.error(f"Request failed — HTTP {response.status_code}: {response.text}")
+                    st.session_state.last_error = f"HTTP {response.status_code}"
 
+            except requests.exceptions.Timeout:
+                st.error("The AI engine took too long to respond (Timeout > 500s).")
+                st.session_state.last_error = "Timeout"
             except requests.exceptions.ConnectionError:
                 st.error("Connection refused. Ensure AnythingLLM is running on localhost:3001.")
+                st.session_state.last_error = "ConnectionError"
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
+                st.session_state.last_error = "Exception"
+
+if st.session_state.output_text:
+    st.markdown('<div class="result-header">Analysis complete</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="result-box">{st.session_state.output_text}</div>', unsafe_allow_html=True)
+    export_content = f"CyberAudit GPT Report\n{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\nQUERY:\n{query}\n\nANALYSIS:\n{st.session_state.output_text}"
+
+    st.download_button(
+        label="Export Analysis",
+        data=export_content,
+        file_name=f"audit_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+        mime="text/plain"
+    )
+
+    if st.session_state.output_sources:
+        st.markdown("**Sources consulted:**")
+        for source in st.session_state.output_sources:
+            title = source.get("title", source.get("id", str(source)))
+            st.markdown(f"- `{title}`")
 
 st.markdown("""
 <div class="footer">
