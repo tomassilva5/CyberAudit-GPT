@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  cyberaudit-gpt:
+    build: .
+    container_name: CyberAudit_GPT_App
+    ports:
+      - "8501:8501"
+    environment:
+      - API_KEY=${API_KEY} 
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
