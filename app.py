@@ -6,7 +6,8 @@ from datetime import datetime
 
 load_dotenv()
 
-ANYTHING_LLM_URL = f"http://{os.getenv('DOCKER_HOST_IP', 'localhost')}:3001/api/v1"
+ANYTHING_LLM_BASE_URL = os.getenv("ANYTHING_LLM_BASE_URL", "http://localhost:3001")
+ANYTHING_LLM_URL = f"{ANYTHING_LLM_BASE_URL}/api/v1"
 WORKSPACE_SLUG = "cyberaudit"
 API_KEY = os.getenv("API_KEY")
 
@@ -30,7 +31,7 @@ if "last_error" not in st.session_state:
 
 def check_server_status():
     try:
-        response = requests.get(f"http://{os.getenv('DOCKER_HOST_IP', 'localhost')}:3001/api/ping", timeout=2)
+        response = requests.get(f"{ANYTHING_LLM_BASE_URL}/api/ping", timeout=2)
         return response.status_code == 200
     except requests.RequestException:
         return False
